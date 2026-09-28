@@ -41,15 +41,6 @@ def plot(field: dict, out_png: str = "temperature.png") -> None:
     )
     fig.colorbar(cf, ax=ax, label="T")
 
-
-    ax.set_aspect("equal")
-    ax.set_xlabel("x")
-    ax.set_ylabel("y")
-    ax.set_title(
-        f"T: bottom={field['T_bottom']:.1f}, right={field['T_right']:.1f}, "
-        f"top={field['T_top']:.1f}, left={field['T_left']:.1f}"
-    )
-
     plt.tight_layout()
     plt.savefig(out_png, dpi=150)
     print(f"saved {out_png}")
