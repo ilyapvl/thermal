@@ -1,4 +1,6 @@
-// solver.cpp
+#ifndef SOLVER.CPP
+#define SOLVER.CPP
+
 #include "solver.hpp"
 #include <cmath>
 #include <algorithm>
@@ -263,3 +265,6 @@ SolverResult cg_solve(const CSR& A,
 
     return res;
 }
+
+
+#endif // SOLVER.CPP
