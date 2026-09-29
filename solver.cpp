@@ -1,5 +1,5 @@
-#ifndef SOLVER.CPP
-#define SOLVER.CPP
+#ifndef SOLVER_CPP
+#define SOLVER_CPP
 
 #include "solver.hpp"
 #include <cmath>
@@ -187,7 +187,8 @@ SolverResult cg_solve(const CSR& A,
                     const std::vector<double>& b,
                     std::vector<double>& x,
                     int max_iter,
-                    double tol)
+                    double tol,
+                    const std::function<void(const std::vector<double>&, std::vector<double>&)>& apply_M)
 {
     using clock = std::chrono::steady_clock;
     const auto t0 = clock::now();
@@ -202,7 +203,9 @@ SolverResult cg_solve(const CSR& A,
 
     const double bnorm = std::sqrt(std::max(dot(b, b), 1e-300));
 
-    z = r;
+    if (apply_M) apply_M(r, z);
+    else z = r;
+
     p = z;
     double rz = dot(r, z);
 
@@ -245,7 +248,8 @@ SolverResult cg_solve(const CSR& A,
             return res;
         }
 
-        z = r;
+        if (apply_M) apply_M(r, z);
+        else z = r;
 
         const double rz_new = dot(r, z);
         const double beta = rz_new / rz;
@@ -267,4 +271,4 @@ SolverResult cg_solve(const CSR& A,
 }
 
 
-#endif // SOLVER.CPP
+#endif // SOLVER_CPP

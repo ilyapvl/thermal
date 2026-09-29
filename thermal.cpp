@@ -1,4 +1,5 @@
 #include "solver.hpp"
+#include "multigrid.hpp"
 
 
 #include <cstdint>
@@ -10,10 +11,11 @@
 #include <string>
 #include <chrono>
 #include <vector>
+#include <functional>
 
 struct Params
 {
-    double Lx = 1.0;
+    double Lx = 2.0;
     double Ly = 1.0;
     int    Nx = 1025;
     int    Ny = 1025;
@@ -25,6 +27,8 @@ struct Params
 
     int max_iter = 1000000;
     double tol      = 1e-9;
+
+    std::string method = "mg";
 };
 
 
@@ -173,8 +177,9 @@ int main(int argc, char** argv)
     if (argc > 4) p.T_right  = std::atof(argv[4]);
     if (argc > 5) p.T_top    = std::atof(argv[5]);
     if (argc > 6) p.T_left   = std::atof(argv[6]);
-    if (argc > 7) p.max_iter = std::atoi(argv[7]);
-    if (argc > 8) p.tol      = std::atof(argv[8]);
+    if (argc > 7) p.method   = argv[7];
+    if (argc > 8) p.max_iter = std::atoi(argv[8]);
+    if (argc > 9) p.tol      = std::atof(argv[9]);
 
     Grid g;
     g.Nx = p.Nx;
@@ -195,7 +200,32 @@ int main(int argc, char** argv)
 
 
     std::vector<double> x(A.rows(), 0.0);
-    const SolverResult res = cg_solve(A, b, x, p.max_iter, p.tol);
+
+    MG* mg = nullptr;
+    std::function<void(const std::vector<double>&, std::vector<double>&)> apply_M;
+
+    if (p.method == "mg")
+    {
+        try
+        {
+            mg = new MG(g.Nx, g.Ny, g.Lx, g.Ly, 3, 3, 0.8);
+        }
+        
+        catch (const std::exception& e)
+        {
+            std::cerr << e.what() << "\n";
+            return 1;
+        }
+
+        apply_M = [mg](const std::vector<double>& r, std::vector<double>& z)
+        {
+            mg->apply(r, z);
+        };
+
+        std::cout << "MG built" << "\n";
+    }
+
+    const SolverResult res = cg_solve(A, b, x, p.max_iter, p.tol, apply_M);
 
     std::cout << "Iterations:    " << res.iterations << "\n";
     std::cout << "Rel residual:  " << res.rel_residual << "\n";

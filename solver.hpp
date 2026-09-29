@@ -63,5 +63,6 @@ SolverResult cg_solve(const CSR& A,
                     const std::vector<double>& b,
                     std::vector<double>& x,
                     int max_iter,
-                    double tol);
+                    double tol,
+                    const std::function<void(const std::vector<double>&, std::vector<double>&)>& apply_M);
 #endif // SOLVER_HPP
