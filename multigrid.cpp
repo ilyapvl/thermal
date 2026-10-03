@@ -4,6 +4,8 @@
 
 MG::MG(int Nx, int Ny, double Lx, double Ly, int nu1, int nu2, double omega) : nu1_(nu1), nu2_(nu2), omega_(omega)
 {
+    enable_omp_ = true;
+
     auto is_pow2 = [](int n){ return n > 0 && (n & (n-1)) == 0; };
     if (!is_pow2(Nx - 1) || !is_pow2(Ny - 1))
         throw std::runtime_error("MG: Nx-1 and Ny-1 != n^2 + 1");
@@ -29,6 +31,7 @@ MG::MG(int Nx, int Ny, double Lx, double Ly, int nu1, int nu2, double omega) : n
         const std::size_t sz = (std::size_t)L.Nx * L.Ny;
 
         L.u.assign(sz, 0.0);
+        L.u_new.assign(sz, 0.0); 
         L.f.assign(sz, 0.0);
         L.r.assign(sz, 0.0);
 
@@ -45,7 +48,7 @@ MG::MG(int Nx, int Ny, double Lx, double Ly, int nu1, int nu2, double omega) : n
 }
 
 
-void MG::smooth(int lvl, int nu, bool forward)
+void MG::smooth(int lvl, int nu)
 {
     Level& L = levels_[lvl];
 
@@ -54,41 +57,28 @@ void MG::smooth(int lvl, int nu, bool forward)
     const double inv_diag = 1.0 / diag;
     const double w = omega_;
 
-    for (int s = 0; s < nu; s++)
+    const bool use_omp = (Nx * Ny) > 8192;
+
+    for (int s = 0; s < nu; ++s)
     {
-        if (forward)
+        #pragma omp parallel for schedule(static) if(use_omp && enable_omp_) collapse(2)
+        for (int j = 1; j < Ny - 1; ++j)
         {
-            for (int j = 1; j < Ny - 1; j++)
+            for (int i = 1; i < Nx - 1; ++i)
             {
-                for (int i = 1; i < Nx - 1; i++)
-                {
-                    const int k = idx(i, j, Nx);
-                    const double Au = diag * L.u[k]
-                        - cx * (L.u[k - 1] + L.u[k + 1])
-                        - cy * (L.u[k - Nx] + L.u[k + Nx]);
+                const int k = idx(i, j, Nx);
+                const double Au = diag * L.u[k]
+                    - cx * (L.u[k - 1] + L.u[k + 1])
+                    - cy * (L.u[k - Nx] + L.u[k + Nx]);
 
-                    L.u[k] += w * (L.f[k] - Au) * inv_diag;
-                }
+                L.u_new[k] = L.u[k] + w * (L.f[k] - Au) * inv_diag;
             }
         }
-        
-        else // backward
-        {
-            for (int j = Ny - 2; j >= 1; j--)
-            {
-                for (int i = Nx - 2; i >= 1; i--)
-                {
-                    const int k = idx(i, j, Nx);
-                    const double Au = diag * L.u[k]
-                        - cx * (L.u[k - 1] + L.u[k + 1])
-                        - cy * (L.u[k - Nx] + L.u[k + Nx]);
 
-                    L.u[k] += w * (L.f[k] - Au) * inv_diag;
-                }
-            }
-        }
+        std::swap(L.u, L.u_new);
     }
 }
+
 
 void MG::compute_residual(int lvl)
 {
@@ -98,12 +88,17 @@ void MG::compute_residual(int lvl)
 
     std::fill(L.r.begin(), L.r.end(), 0.0);
 
-    for (int j = 1; j < Ny - 1; j++)
+    const bool use_omp = (Nx * Ny) > 8192;
+
+    #pragma omp parallel for schedule(static) if(use_omp && enable_omp_) collapse(2)
+    for (int j = 1; j < Ny - 1; ++j)
     {
         for (int i = 1; i < Nx - 1; ++i)
         {
             const int k = idx(i, j, Nx);
-            const double Au = diag * L.u[k] - cx * (L.u[k - 1] + L.u[k + 1]) - cy * (L.u[k - Nx] + L.u[k + Nx]);
+            const double Au = diag * L.u[k]
+                - cx * (L.u[k - 1] + L.u[k + 1])
+                - cy * (L.u[k - Nx] + L.u[k + Nx]);
             L.r[k] = L.f[k] - Au;
         }
     }
@@ -119,9 +114,13 @@ void MG::conv2d_restrict(int lvl)
     const int Nyf = F.Ny, Nyc = C.Ny;
 
     std::fill(C.f.begin(), C.f.end(), 0.0);
-    for (int jc = 1; jc < Nyc - 1; jc++)
+
+    const bool use_omp = (Nxc * Nyc) > 8192;
+
+    #pragma omp parallel for schedule(static) if(use_omp && enable_omp_)
+    for (int jc = 1; jc < Nyc - 1; ++jc)
     {
-        for (int ic = 1; ic < Nxc - 1; ic++)
+        for (int ic = 1; ic < Nxc - 1; ++ic)
         {
             const int fi = 2 * ic, fj = 2 * jc;
 
@@ -150,21 +149,26 @@ void MG::interpolate_reverse(int lvl)
     const int Nxf = F.Nx, Nxc = C.Nx;
     const int Nyf = F.Ny, Nyc = C.Ny;
 
+    const bool use_omp = (Nxc * Nyc) > 4096;
+
     // even even
+    #pragma omp parallel for schedule(static) if(use_omp && enable_omp_) collapse(2)
     for (int jc = 0; jc < Nyc; jc++)
         for (int ic = 0; ic < Nxc; ic++)
             F.u[idx(2 * ic, 2 * jc, Nxf)] += C.u[idx(ic, jc, Nxc)];
 
     // odd even
+    #pragma omp parallel for schedule(static) if(use_omp && enable_omp_) collapse(2)
     for (int jc = 0; jc < Nyc; jc++)
-        for (int ic = 0; ic + 1 < Nxc; ic++)
+        for (int ic = 0; ic < Nxc - 1; ic++)
         {
             const double v = 0.5 * (C.u[idx(ic, jc, Nxc)] + C.u[idx(ic + 1, jc, Nxc)]);
             F.u[idx(2 * ic + 1, 2 * jc, Nxf)] += v;
         }
 
     // even odd
-    for (int jc = 0; jc + 1 < Nyc; jc++)
+    #pragma omp parallel for schedule(static) if(use_omp && enable_omp_) collapse(2)
+    for (int jc = 0; jc < Nyc - 1; jc++)
         for (int ic = 0; ic < Nxc; ic++)
         {
             const double v = 0.5 * (C.u[idx(ic, jc, Nxc)] + C.u[idx(ic, jc + 1, Nxc)]);
@@ -172,8 +176,9 @@ void MG::interpolate_reverse(int lvl)
         }
 
     // odd odd
-    for (int jc = 0; jc + 1 < Nyc; jc++)
-        for (int ic = 0; ic + 1 < Nxc; ic++)
+    #pragma omp parallel for schedule(static) if(use_omp && enable_omp_) collapse(2)
+    for (int jc = 0; jc < Nyc - 1; jc++)
+        for (int ic = 0; ic < Nxc - 1; ic++)
         {
             const double v = 0.25 * (
                 C.u[idx(ic, jc, Nxc)] + C.u[idx(ic + 1, jc, Nxc)] +
@@ -217,7 +222,7 @@ void MG::v_cycle(int lvl)
         return;
     }
 
-    smooth(lvl, nu1_, true);
+    smooth(lvl, nu1_);
 
     compute_residual(lvl);
 
@@ -229,7 +234,7 @@ void MG::v_cycle(int lvl)
 
     interpolate_reverse(lvl);
 
-    smooth(lvl, nu2_, false);
+    smooth(lvl, nu2_);
 }
 
 // r -> z
@@ -242,6 +247,7 @@ void MG::apply(const std::vector<double>& r_fine,
     for (auto& L : levels_)
     {
         std::fill(L.u.begin(), L.u.end(), 0.0);
+        std::fill(L.u_new.begin(), L.u_new.end(), 0.0);
         std::fill(L.f.begin(), L.f.end(), 0.0);
     }
 
