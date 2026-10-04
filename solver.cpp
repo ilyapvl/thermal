@@ -8,6 +8,10 @@
 #include <stdexcept>
 #include <chrono>
 
+#ifdef __APPLE__
+#include <Accelerate/Accelerate.h>
+#endif
+
 
 CSR::CSR(int n,
          const std::vector<int>&    rows,
@@ -146,6 +150,21 @@ void CSR::sort_rows()
 }
 
 
+void CSR::build_from_sorted(int n,
+                            std::vector<int>    row_ptr,
+                            std::vector<int>    col_idx,
+                            std::vector<double> values)
+{
+    n_ = n;
+    row_ptr_ = std::move(row_ptr);
+    col_idx_ = std::move(col_idx);
+    values_  = std::move(values);
+}
+
+
+
+
+
 void CSR::spmv(const double* x, double* y) const
 {
     for (int i = 0; i < n_; ++i)
@@ -170,16 +189,21 @@ void CSR::spmv(const std::vector<double>& x, std::vector<double>& y) const
 
 double dot(const double* a, const double* b, int n)
 {
-    double s = 0.0;
+#ifdef __APPLE__
+    double result = 0.0;
+    vDSP_dotprD(a, 1, b, 1, &result, static_cast<vDSP_Length>(n));
+    return result;
+#else
 
-    for (int i = 0; i < n; ++i)
+    double s = 0.0;
+    for (int i = 0; i < n; i++)
     {
         s += a[i] * b[i];
     }
 
     return s;
+#endif
 }
-
 
 
 
@@ -190,16 +214,53 @@ SolverResult cg_solve(const CSR& A,
                     double tol,
                     const std::function<void(const std::vector<double>&, std::vector<double>&)>& apply_M)
 {
+    auto apply_A = [&A](const std::vector<double>& xx, std::vector<double>& yy) {
+        A.spmv(xx, yy);
+    };
+    return cg_solve_generic(apply_A, b, x, apply_M, max_iter, tol);
+}
+
+
+
+static inline int A_rows_from_b(const std::vector<double>& b) {
+    return static_cast<int>(b.size());
+}
+
+
+
+
+
+
+
+
+
+
+
+SolverResult cg_solve_generic(const std::function<void(const std::vector<double>&, std::vector<double>&)>& apply_A,
+                            const std::vector<double>& b,
+                            std::vector<double>& x,
+                            const std::function<void(const std::vector<double>&, std::vector<double>&)>& apply_M,
+                            int max_iter,
+                            double tol)
+{
     using clock = std::chrono::steady_clock;
     const auto t0 = clock::now();
 
-    const int n = A.rows();
+    const int n = A_rows_from_b(b);
     if ((int)x.size() != n) x.assign(n, 0.0);
 
     std::vector<double> r(n), z(n), p(n), Ap(n);
 
-    A.spmv(x, r);
-    for (int i = 0; i < n; ++i) r[i] = b[i] - r[i];
+    apply_A(x, r);
+    #ifdef __APPLE__
+    {
+        const double neg_one = -1.0;
+        vDSP_vsmaD(r.data(), 1, &neg_one, b.data(), 1, r.data(), 1, static_cast<vDSP_Length>(n));
+    }
+
+    #else
+    for (int i = 0; i < n; i++) r[i] = b[i] - r[i];
+    #endif
 
     const double bnorm = std::sqrt(std::max(dot(b, b), 1e-300));
 
@@ -211,29 +272,39 @@ SolverResult cg_solve(const CSR& A,
 
     for (int it = 1; it <= max_iter; it++)
     {
-        A.spmv(p, Ap);
-
+        apply_A(p, Ap);
         const double pAp = dot(p, Ap);
 
         if (pAp <= 0.0)
         {
             SolverResult res;
-
             res.iterations   = it - 1;
             res.rel_residual = std::sqrt(dot(r, r)) / bnorm;
             res.converged    = false;
             res.seconds      = std::chrono::duration<double>(clock::now() - t0).count();
-
             return res;
         }
 
         const double alpha = rz / pAp;
 
-        for (int i = 0; i < n; ++i)
+        #ifdef __APPLE__
+
+        {
+            const double pos_a =  alpha;
+            const double neg_a = -alpha;
+            vDSP_vsmaD(p.data(),  1, &pos_a, x.data(), 1, x.data(), 1, static_cast<vDSP_Length>(n));
+            vDSP_vsmaD(Ap.data(), 1, &neg_a, r.data(), 1, r.data(), 1, static_cast<vDSP_Length>(n));
+        }
+
+        #else
+
+        for (int i = 0; i < n; i++)
         {
             x[i] += alpha * p[i];
             r[i] -= alpha * Ap[i];
         }
+
+        #endif
 
         const double rnorm = std::sqrt(dot(r, r));
 
@@ -253,10 +324,17 @@ SolverResult cg_solve(const CSR& A,
 
         const double rz_new = dot(r, z);
         const double beta = rz_new / rz;
-        for (int i = 0; i < n; ++i)
+
+        #ifdef __APPLE__
+
         {
-            p[i] = z[i] + beta * p[i];
+            const double bb = beta;
+            vDSP_vsmaD(p.data(), 1, &bb, z.data(), 1, p.data(), 1, static_cast<vDSP_Length>(n));
         }
+
+        #else
+        for (int i = 0; i < n; i++) p[i] = z[i] + beta * p[i];
+        #endif
 
         rz = rz_new;
     }
