@@ -30,6 +30,7 @@ public:
     void resize(int n);
     void reserve(std::size_t nnz_hint);
     void sort_rows();
+    void build_from_sorted(int n, std::vector<int> row_ptr, std::vector<int> col_idx, std::vector<double> values);
 
     // y = A*x
     void spmv(const double* x, double* y) const;
@@ -65,4 +66,19 @@ SolverResult cg_solve(const CSR& A,
                     int max_iter,
                     double tol,
                     const std::function<void(const std::vector<double>&, std::vector<double>&)>& apply_M);
+
+
+
+
+
+SolverResult cg_solve_generic(const std::function<void(const std::vector<double>&, std::vector<double>&)>& apply_A,
+                            const std::vector<double>& b,
+                            std::vector<double>& x,
+                            const std::function<void(const std::vector<double>&, std::vector<double>&)>& apply_M,
+                            int max_iter,
+                            double tol);
+
+
+
+
 #endif // SOLVER_HPP

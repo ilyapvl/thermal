@@ -1,6 +1,6 @@
 #include "solver.hpp"
 #include "multigrid.hpp"
-
+#include "metal_backend.hpp"
 
 #include <cstdint>
 #include <cmath>
@@ -25,12 +25,11 @@ struct Params
     double T_top    = 0.0;
     double T_left   = 0.0;
 
-    int max_iter = 1000000;
+    int    max_iter = 1000000;
     double tol      = 1e-9;
 
     std::string method = "mg";
 };
-
 
 struct Grid
 {
@@ -50,67 +49,64 @@ struct Grid
     int num_inner() const { return (Nx - 2) * (Ny - 2); }
 };
 
-
 static void assemble(const Grid& g, const Params& p, CSR& A, std::vector<double>& b)
 {
-    const int M = g.num_inner();
+    const int Mx = g.Nx - 2;
+    const int My = g.Ny - 2;
+    const int M  = Mx * My;
+
     b.assign(M, 0.0);
 
     const double cx   = 1.0 / (g.hx * g.hx);
     const double cy   = 1.0 / (g.hy * g.hy);
     const double diag = 2.0 * (cx + cy);
 
-    auto wall_T = [&](int i, int j) -> double
+    std::vector<int> rp(M + 1, 0);
+
+    #pragma omp parallel for schedule(static) if(M > 100000)
+    for (int j = 0; j < My; j++)
     {
-        if (j == 0)            return p.T_bottom;
-        if (j == g.Ny - 1)     return p.T_top;
-        if (i == 0)            return p.T_left;
-        if (i == g.Nx - 1)     return p.T_right;
-
-        throw std::runtime_error("invalid wall node");
-    };
-
-    std::vector<int> rows, cols;
-    std::vector<double> vals;
-
-    rows.reserve(M * 5);
-    cols.reserve(M * 5);
-    vals.reserve(M * 5);
-
-    for (int j = 1; j < g.Ny - 1; ++j)
-    {
-        for (int i = 1; i < g.Nx - 1; ++i)
+        for (int i = 0; i < Mx; i++)
         {
-            const int k = g.inner(i, j);
+            const int k = j * Mx + i;
+            int cnt = 1;
+            if (i > 0)      cnt++;
+            if (i + 1 < Mx) cnt++;
+            if (j > 0)      cnt++;
+            if (j + 1 < My) cnt++;
+            rp[k + 1] = cnt;
+        }
+    }
+    for (int k = 0; k < M; k++) rp[k + 1] += rp[k];
 
-            rows.push_back(k); cols.push_back(k); vals.push_back(diag);
+    const int nnz = rp[M];
+    std::vector<int>    ci(nnz);
+    std::vector<double> v(nnz);
 
-            const int di[4] = {-1, +1,  0,  0};
-            const int dj[4] = { 0,  0, -1, +1};
-            const double c[4] = {cx, cx, cy, cy};
+    #pragma omp parallel for schedule(static)
+    for (int j = 0; j < My; j++)
+    {
+        for (int i = 0; i < Mx; i++)
+        {
+            const int k = j * Mx + i;
+            int pos = rp[k];
 
-            for (int s = 0; s < 4; ++s)
-            {
-                const int ni = i + di[s];
-                const int nj = j + dj[s];
-                const int nk = g.inner(ni, nj);
+            if (j > 0)      { ci[pos] = k - Mx; v[pos] = -cy;  pos++; }
+            if (i > 0)      { ci[pos] = k - 1;  v[pos] = -cx;  pos++; }
+                              ci[pos] = k;      v[pos] = diag; pos++;
+            if (i + 1 < Mx) { ci[pos] = k + 1;  v[pos] = -cx;  pos++; }
+            if (j + 1 < My) { ci[pos] = k + Mx; v[pos] = -cy;  pos++; }
 
-                if (nk >= 0)
-                {
-                    rows.push_back(k);
-                    cols.push_back(nk);
-                    vals.push_back(-c[s]);
-                }
-                
-                else
-                {
-                    b[k] += c[s] * wall_T(ni, nj);
-                }
-            }
+            double bk = 0.0;
+            if (i == 0)      bk += cx * p.T_left;
+            if (i + 1 == Mx) bk += cx * p.T_right;
+            if (j == 0)      bk += cy * p.T_bottom;
+            if (j + 1 == My) bk += cy * p.T_top;
+            b[k] = bk;
         }
     }
 
-    A = CSR(M, rows, cols, vals);
+    A.build_from_sorted(M, std::move(rp), std::move(ci), std::move(v));
 }
 
 void write_file(const std::string& path, const Grid& g, const std::vector<double>& T_inner, const Params& p)
@@ -129,7 +125,6 @@ void write_file(const std::string& path, const Grid& g, const std::vector<double
     f.write(reinterpret_cast<const char*>(&p.T_right), 8);
     f.write(reinterpret_cast<const char*>(&p.T_top), 8);
     f.write(reinterpret_cast<const char*>(&p.T_left), 8);
-
 
     std::vector<double> Tfull(static_cast<std::size_t>(g.Nx) * g.Ny, 0.0);
     for (int j = 0; j < g.Ny; j++)
@@ -167,6 +162,29 @@ void write_file(const std::string& path, const Grid& g, const std::vector<double
     f.write(reinterpret_cast<const char*>(Tfull.data()), static_cast<std::streamsize>(Tfull.size() * sizeof(double)));
 }
 
+
+
+
+static void laplacian_spmv_stencil(const double* x, double* y, int Mx, int My, double cx, double cy, double diag)
+{
+    #pragma omp parallel for schedule(static)
+    for (int j = 0; j < My; j++)
+    {
+        for (int i = 0; i < Mx; i++)
+        {
+            const int k = j * Mx + i;
+
+            double s = diag * x[k];
+            if (i > 0) s -= cx * x[k - 1];
+            if (i + 1 < Mx) s -= cx * x[k + 1];
+            if (j > 0) s -= cy * x[k - Mx];
+            if (j + 1 < My) s -= cy * x[k + Mx];
+
+            y[k] = s;
+        }
+    }
+}
+
 int main(int argc, char** argv)
 {
     Params p;
@@ -198,22 +216,52 @@ int main(int argc, char** argv)
     std::cout << "Inner nodes: " << A.rows() << "\n";
     std::cout << "NNZ: "         << A.nnz()  << "\n";
 
+    metal_backend::Context* metal_ctx = nullptr;
 
-    std::vector<double> x(A.rows(), 0.0);
+    if (p.method == "mg_gpu")
+    {
+        try
+        {
+            metal_ctx = new metal_backend::Context();
+            std::cout << "Metal device: " << metal_ctx->device_name() << "\n";
+        }
+        catch (const std::exception& e)
+        {
+            std::cerr << "Metal init failed: " << e.what() << "\n";
+            delete metal_ctx;
+            return 1;
+        }
+    }
+
+    std::function<void(const std::vector<double>&, std::vector<double>&)> apply_A;
+
+
+    const int Mx = g.Nx - 2;
+    const int My = g.Ny - 2;
+    const double cx_d = 1.0 / (g.hx * g.hx);
+    const double cy_d = 1.0 / (g.hy * g.hy);
+    const double diag_d = 2.0 * (cx_d + cy_d);
+
+    apply_A = [Mx, My, cx_d, cy_d, diag_d](const std::vector<double>& x, std::vector<double>& y)
+    {
+        if (y.size() != x.size()) y.resize(x.size());
+        laplacian_spmv_stencil(x.data(), y.data(), Mx, My, cx_d, cy_d, diag_d);
+    };
+
 
     MG* mg = nullptr;
     std::function<void(const std::vector<double>&, std::vector<double>&)> apply_M;
 
-    if (p.method == "mg")
+    if (p.method == "mg" || p.method == "mg_gpu")
     {
         try
         {
-            mg = new MG(g.Nx, g.Ny, g.Lx, g.Ly, 3, 3, 0.8);
+            mg = new MG(metal_ctx, g.Nx, g.Ny, g.Lx, g.Ly, 3, 3, 0.667);
         }
-        
         catch (const std::exception& e)
         {
-            std::cerr << e.what() << "\n";
+            std::cerr << "MG init failed: " << e.what() << "\n";
+            delete metal_ctx;
             return 1;
         }
 
@@ -221,18 +269,24 @@ int main(int argc, char** argv)
         {
             mg->apply(r, z);
         };
-
-        std::cout << "MG built" << "\n";
     }
 
-    const SolverResult res = cg_solve(A, b, x, p.max_iter, p.tol, apply_M);
+    std::vector<double> x(A.rows(), 0.0);
 
-    std::cout << "Iterations:    " << res.iterations << "\n";
-    std::cout << "Rel residual:  " << res.rel_residual << "\n";
+    const SolverResult res = cg_solve_generic(apply_A, b, x, apply_M, p.max_iter, p.tol);
+
+
+    std::cout << "Method:        " << p.method << "\n";
+    std::cout << "Iterations:    " << res.iterations    << "\n";
+    std::cout << "Rel residual:  " << res.rel_residual  << "\n";
     std::cout << "Converged:     " << (res.converged ? "yes" : "no") << "\n";
-    std::cout << "Time:          " << res.seconds << " s\n";
+    std::cout << "Time:          " << res.seconds       << " s\n";
 
     write_file("field.bin", g, x, p);
+    std::cout << "Written: field.bin\n";
+
+    delete mg;
+    delete metal_ctx;
 
     return 0;
 }
