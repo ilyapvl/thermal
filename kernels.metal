@@ -1,30 +1,6 @@
 #include <metal_stdlib>
 using namespace metal;
 
-kernel void laplacian_spmv(device const float* x [[buffer(0)]],
-                        device float*       y [[buffer(1)]],
-                        constant uint&      Mx [[buffer(2)]],
-                        constant uint&      My [[buffer(3)]],
-                        constant float&     cx [[buffer(4)]],
-                        constant float&     cy [[buffer(5)]],
-                        constant float&     diag [[buffer(6)]],
-                        uint                k  [[thread_position_in_grid]])
-{
-    const uint M = Mx * My;
-    if (k >= M) return;
-
-    const uint i = k % Mx;
-    const uint j = k / Mx;
-
-    float s = diag * x[k];
-    if (i > 0)       s -= cx * x[k - 1];
-    if (i + 1 < Mx)  s -= cx * x[k + 1];
-    if (j > 0)       s -= cy * x[k - Mx];
-    if (j + 1 < My)  s -= cy * x[k + Mx];
-
-    y[k] = s;
-}
-
 kernel void jacobi_smooth(device const float* u     [[buffer(0)]],
                         device const float* f     [[buffer(1)]],
                         device float*       u_new [[buffer(2)]],
