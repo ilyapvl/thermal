@@ -10,4 +10,5 @@ simple_solver.cpp
 *.air
 *.xml
 *.sh
+/build
 
