@@ -1,7 +1,6 @@
 #ifndef METAL_BACKEND_HPP
 #define METAL_BACKEND_HPP
 
-
 #include <vector>
 #include <cstddef>
 
@@ -51,11 +50,6 @@ public:
     bool        available()   const;
     const char* device_name() const;
 
-    struct LaplacianParams
-    {
-        int    Nx, Ny;
-        double hx, hy;
-    };
 
     struct JacobiParams
     {
@@ -65,11 +59,6 @@ public:
     };
 
 
-    void create_spmv_workspace(const LaplacianParams& p);
-    void destroy_spmv_workspace();
-
-    void laplacian_spmv_persistent(const std::vector<double>& x,
-                                   std::vector<double>&       y);
 
 
     void jacobi_smooth_device(DeviceBuffer&       u,

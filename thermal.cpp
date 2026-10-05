@@ -49,65 +49,6 @@ struct Grid
     int num_inner() const { return (Nx - 2) * (Ny - 2); }
 };
 
-static void assemble(const Grid& g, const Params& p, CSR& A, std::vector<double>& b)
-{
-    const int Mx = g.Nx - 2;
-    const int My = g.Ny - 2;
-    const int M  = Mx * My;
-
-    b.assign(M, 0.0);
-
-    const double cx   = 1.0 / (g.hx * g.hx);
-    const double cy   = 1.0 / (g.hy * g.hy);
-    const double diag = 2.0 * (cx + cy);
-
-    std::vector<int> rp(M + 1, 0);
-
-    #pragma omp parallel for schedule(static) if(M > 100000)
-    for (int j = 0; j < My; j++)
-    {
-        for (int i = 0; i < Mx; i++)
-        {
-            const int k = j * Mx + i;
-            int cnt = 1;
-            if (i > 0)      cnt++;
-            if (i + 1 < Mx) cnt++;
-            if (j > 0)      cnt++;
-            if (j + 1 < My) cnt++;
-            rp[k + 1] = cnt;
-        }
-    }
-    for (int k = 0; k < M; k++) rp[k + 1] += rp[k];
-
-    const int nnz = rp[M];
-    std::vector<int>    ci(nnz);
-    std::vector<double> v(nnz);
-
-    #pragma omp parallel for schedule(static)
-    for (int j = 0; j < My; j++)
-    {
-        for (int i = 0; i < Mx; i++)
-        {
-            const int k = j * Mx + i;
-            int pos = rp[k];
-
-            if (j > 0)      { ci[pos] = k - Mx; v[pos] = -cy;  pos++; }
-            if (i > 0)      { ci[pos] = k - 1;  v[pos] = -cx;  pos++; }
-                              ci[pos] = k;      v[pos] = diag; pos++;
-            if (i + 1 < Mx) { ci[pos] = k + 1;  v[pos] = -cx;  pos++; }
-            if (j + 1 < My) { ci[pos] = k + Mx; v[pos] = -cy;  pos++; }
-
-            double bk = 0.0;
-            if (i == 0)      bk += cx * p.T_left;
-            if (i + 1 == Mx) bk += cx * p.T_right;
-            if (j == 0)      bk += cy * p.T_bottom;
-            if (j + 1 == My) bk += cy * p.T_top;
-            b[k] = bk;
-        }
-    }
-
-    A.build_from_sorted(M, std::move(rp), std::move(ci), std::move(v));
-}
 
 void write_file(const std::string& path, const Grid& g, const std::vector<double>& T_inner, const Params& p)
 {
@@ -165,7 +106,7 @@ void write_file(const std::string& path, const Grid& g, const std::vector<double
 
 
 
-static void laplacian_spmv_stencil(const double* x, double* y, int Mx, int My, double cx, double cy, double diag)
+static void spmv(const double* x, double* y, int Mx, int My, double cx, double cy, double diag)
 {
     #pragma omp parallel for schedule(static)
     for (int j = 0; j < My; j++)
@@ -182,6 +123,59 @@ static void laplacian_spmv_stencil(const double* x, double* y, int Mx, int My, d
 
             y[k] = s;
         }
+    }
+}
+
+static void assemble_rhs(const Grid& g, const Params& p, std::vector<double>& b)
+{
+    const int Mx = g.Nx - 2;
+    const int My = g.Ny - 2;
+    const int M = Mx * My;
+
+    b.assign(M, 0.0);
+
+    const double cx = 1.0 / (g.hx * g.hx);
+    const double cy = 1.0 / (g.hy * g.hy);
+
+    #pragma omp parallel for schedule(static)
+    for (int j = 0; j < My; j++)
+    {
+        for (int i = 0; i < Mx; i++)
+        {
+            const int k = j * Mx + i;
+            double bk = 0.0;
+            if (i == 0) bk += cx * p.T_left;
+            if (i + 1 == Mx) bk += cx * p.T_right;
+            if (j == 0) bk += cy * p.T_bottom;
+            if (j + 1 == My) bk += cy * p.T_top;
+            b[k] = bk;
+        }
+    }
+}
+
+
+static void fill_rhs_boundary(std::vector<double>& r, int Mx, int My, double cx_d, double cy_d, const Params& p)
+{
+    for (int i = 0; i < Mx; i++)
+    {
+        double v = cy_d * p.T_bottom;
+        if (i == 0) v += cx_d * p.T_left;
+        if (i + 1 == Mx) v += cx_d * p.T_right;
+        r[i] = v;
+    }
+
+    for (int i = 0; i < Mx; i++)
+    {
+        double v = cy_d * p.T_top;
+        if (i == 0) v += cx_d * p.T_left;
+        if (i + 1 == Mx) v += cx_d * p.T_right;
+        r[(My - 1) * Mx + i] = v;
+    }
+
+    for (int j = 1; j < My - 1; j++)
+    {
+        r[j * Mx] = cx_d * p.T_left;
+        r[j * Mx + (Mx - 1)] = cx_d * p.T_right;
     }
 }
 
@@ -207,14 +201,25 @@ int main(int argc, char** argv)
     g.hx = p.Lx / (p.Nx - 1);
     g.hy = p.Ly / (p.Ny - 1);
 
-    CSR A;
+    const int Mx = g.Nx - 2;
+    const int My = g.Ny - 2;
+
+
+    const double cx_d = 1.0 / (g.hx * g.hx);
+    const double cy_d = 1.0 / (g.hy * g.hy);
+
     std::vector<double> b;
 
-    assemble(g, p, A, b);
+    assemble_rhs(g, p, b);
 
-    std::cout << "Grid: "        << g.Nx << " x " << g.Ny << std::endl;
-    std::cout << "Inner nodes: " << A.rows() << "\n";
-    std::cout << "NNZ: "         << A.nnz()  << "\n";
+    std::cout << "Grid: " << g.Nx << " x " << g.Ny << std::endl;
+
+    const long long M = static_cast<long long>(Mx) * My;
+    const long long nnz = 5LL * Mx * My - 2LL * Mx - 2LL * My;
+
+    std::cout << "Inner nodes: " << M << "\n";
+    std::cout << "NNZ: " << nnz << "\n";
+    
 
     metal_backend::Context* metal_ctx = nullptr;
 
@@ -233,48 +238,67 @@ int main(int argc, char** argv)
         }
     }
 
-    std::function<void(const std::vector<double>&, std::vector<double>&)> apply_A;
 
 
-    const int Mx = g.Nx - 2;
-    const int My = g.Ny - 2;
-    const double cx_d = 1.0 / (g.hx * g.hx);
-    const double cy_d = 1.0 / (g.hy * g.hy);
-    const double diag_d = 2.0 * (cx_d + cy_d);
+    
 
-    apply_A = [Mx, My, cx_d, cy_d, diag_d](const std::vector<double>& x, std::vector<double>& y)
+
+std::function<void(std::vector<double>&)> fill_rhs;
+
+
+fill_rhs = [Mx, My, cx_d, cy_d, &p](std::vector<double>& r)
+{
+    fill_rhs_boundary(r, Mx, My, cx_d, cy_d, p);
+};
+
+
+
+double bnorm_sq = 0.0;
+
+
+
+{
+    std::vector<double> btmp(M, 0.0);
+    fill_rhs(btmp);
+    for (double v : btmp) bnorm_sq += v * v;
+}
+
+
+std::function<void(const std::vector<double>&, std::vector<double>&)> apply_A;
+
+
+apply_A = [Mx, My, cx_d, cy_d](const std::vector<double>& x, std::vector<double>& y)
+{
+    if (y.size() != x.size()) y.resize(x.size());
+    spmv(x.data(), y.data(), Mx, My, cx_d, cy_d, 2.0 * (cx_d + cy_d));
+};
+
+
+MG* mg = nullptr;
+std::function<void(const std::vector<double>&, std::vector<double>&)> apply_M;
+
+if (p.method == "mg" || p.method == "mg_gpu")
+{
+    try
     {
-        if (y.size() != x.size()) y.resize(x.size());
-        laplacian_spmv_stencil(x.data(), y.data(), Mx, My, cx_d, cy_d, diag_d);
-    };
-
-
-    MG* mg = nullptr;
-    std::function<void(const std::vector<double>&, std::vector<double>&)> apply_M;
-
-    if (p.method == "mg" || p.method == "mg_gpu")
+        mg = new MG(metal_ctx, g.Nx, g.Ny, g.Lx, g.Ly, 3, 3, 0.667);
+    }
+    catch (const std::exception& e)
     {
-        try
-        {
-            mg = new MG(metal_ctx, g.Nx, g.Ny, g.Lx, g.Ly, 3, 3, 0.667);
-        }
-        catch (const std::exception& e)
-        {
-            std::cerr << "MG init failed: " << e.what() << "\n";
-            delete metal_ctx;
-            return 1;
-        }
-
-        apply_M = [mg](const std::vector<double>& r, std::vector<double>& z)
-        {
-            mg->apply(r, z);
-        };
+        std::cerr << "MG init failed: " << e.what() << "\n";
+        delete metal_ctx;
+        return 1;
     }
 
-    std::vector<double> x(A.rows(), 0.0);
+    apply_M = [mg](const std::vector<double>& r, std::vector<double>& z)
+    {
+        mg->apply(r, z);
+    };
+}
 
-    const SolverResult res = cg_solve_generic(apply_A, b, x, apply_M, p.max_iter, p.tol);
+std::vector<double> x(M, 0.0);
 
+const SolverResult res = cg_solve_generic(apply_A, bnorm_sq, fill_rhs, x, apply_M, p.max_iter, p.tol);
 
     std::cout << "Method:        " << p.method << "\n";
     std::cout << "Iterations:    " << res.iterations    << "\n";

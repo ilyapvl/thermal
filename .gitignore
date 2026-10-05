@@ -6,3 +6,8 @@ baseline
 simple_solver.cpp
 /thermal.dSYM
 /thermal.trace
+*.metallib
+*.air
+*.xml
+*.sh
+

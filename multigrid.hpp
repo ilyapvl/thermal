@@ -45,11 +45,11 @@ private:
     int nu1_, nu2_;
     double omega_;
     metal_backend::Context* ctx_ = nullptr;
-    bool enable_omp_ = false;
+    bool enable_omp_ = true;
     bool enable_gpu_ = true;
 
     bool gpu_batch_open_ = false;
-    int  gpu_threshold_ = 10000000;
+    int  gpu_threshold_ = 4000000;
 
     void v_cycle(int lvl);
     void smooth(int lvl, int nu);
