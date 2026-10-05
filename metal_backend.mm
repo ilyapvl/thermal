@@ -58,10 +58,8 @@ void DeviceBuffer::resize(std::size_t n)
     if (!dev) throw std::runtime_error("DeviceBuffer::resize: no Metal device");
 
     const std::size_t bytes = n * sizeof(float);
-    impl_->buffer = [dev newBufferWithLength:bytes
-                                     options:MTLResourceStorageModeShared];
-    if (!impl_->buffer)
-        throw std::runtime_error("DeviceBuffer::resize: cannot allocate MTLBuffer");
+    impl_->buffer = [dev newBufferWithLength:bytes options:MTLResourceStorageModeShared];
+    if (!impl_->buffer) throw std::runtime_error("DeviceBuffer::resize: cannot allocate MTLBuffer");
 
     impl_->n = n;
 }
@@ -108,17 +106,9 @@ struct Context::Impl
     id<MTLCommandQueue>         queue       = nil;
     id<MTLLibrary>              library     = nil;
 
-    id<MTLComputePipelineState> pso_add         = nil;
-    id<MTLComputePipelineState> pso_lapspmv     = nil;
     id<MTLComputePipelineState> pso_jacobi      = nil;
     id<MTLComputePipelineState> pso_resrestrict = nil;
     id<MTLComputePipelineState> pso_prolong     = nil;
-
-    id<MTLBuffer>   spmv_buf_x  = nil;
-    id<MTLBuffer>   spmv_buf_y  = nil;
-    int             spmv_M      = 0;
-    LaplacianParams spmv_params {};
-    bool            spmv_ready  = false;
 
     id<MTLCommandBuffer>         batch_cb  = nil;
     id<MTLComputeCommandEncoder> batch_enc = nil;
@@ -136,24 +126,17 @@ static void check_ns_error(NSError* err, const char* what)
     }
 }
 
-static id<MTLComputePipelineState>
-make_pipeline(id<MTLDevice> device, id<MTLLibrary> lib, const char* name)
+static id<MTLComputePipelineState> make_pipeline(id<MTLDevice> device, id<MTLLibrary> lib, const char* name)
 {
     id<MTLFunction> fn = [lib newFunctionWithName:[NSString stringWithUTF8String:name]];
-    if (!fn)
-    {
-        throw std::runtime_error(std::string("Metal: kernel '") + name + "' not found");
-    }
+    if (!fn) throw std::runtime_error(std::string("Metal: kernel '") + name + "' not found");
 
     NSError* err = nil;
     id<MTLComputePipelineState> pso = [device newComputePipelineStateWithFunction:fn error:&err];
-
     check_ns_error(err, ("Metal: cannot create pipeline for " + std::string(name)).c_str());
 
-    if (!pso)
-    {
-        throw std::runtime_error(std::string("Metal: pipeline is nil for ") + name);
-    }
+    if (!pso) throw std::runtime_error(std::string("Metal: pipeline is nil for ") + name);
+
     return pso;
 }
 
@@ -204,21 +187,17 @@ static void release_enc(id<MTLCommandBuffer>         cb,
 Context::Context() : impl_(new Impl)
 {
     impl_->device = MTLCreateSystemDefaultDevice();
-    if (!impl_->device)
-        throw std::runtime_error("Metal: no default device");
+    if (!impl_->device) throw std::runtime_error("Metal: no default device");
 
     impl_->queue = [impl_->device newCommandQueue];
-    if (!impl_->queue)
-        throw std::runtime_error("Metal: cannot create command queue");
+    if (!impl_->queue) throw std::runtime_error("Metal: cannot create command queue");
 
     NSError* err = nil;
     NSURL* url = [NSURL fileURLWithPath:@"default.metallib"];
     impl_->library = [impl_->device newLibraryWithURL:url error:&err];
     check_ns_error(err, "Metal: cannot load default.metallib");
-    if (!impl_->library)
-        throw std::runtime_error("Metal: library is nil (default.metallib missing?)");
+    if (!impl_->library) throw std::runtime_error("Metal: library is nil (default.metallib missing?)");
 
-    impl_->pso_lapspmv     = make_pipeline(impl_->device, impl_->library, "laplacian_spmv");
     impl_->pso_jacobi      = make_pipeline(impl_->device, impl_->library, "jacobi_smooth");
     impl_->pso_resrestrict = make_pipeline(impl_->device, impl_->library, "residual_restrict");
     impl_->pso_prolong     = make_pipeline(impl_->device, impl_->library, "prolong_add");
@@ -242,108 +221,11 @@ const char* Context::device_name() const
     return impl_->device_name.c_str();
 }
 
-
-
-void Context::create_spmv_workspace(const LaplacianParams& p)
-{
-    const int Mx = p.Nx - 2;
-    const int My = p.Ny - 2;
-    if (Mx <= 0 || My <= 0)
-        throw std::runtime_error("create_spmv_workspace: grid too small");
-
-    destroy_spmv_workspace();
-
-    const std::size_t M = static_cast<std::size_t>(Mx) * static_cast<std::size_t>(My);
-    const std::size_t bytes = M * sizeof(float);
-
-    impl_->spmv_buf_x = [impl_->device newBufferWithLength:bytes
-                                                   options:MTLResourceStorageModeShared];
-    impl_->spmv_buf_y = [impl_->device newBufferWithLength:bytes
-                                                   options:MTLResourceStorageModeShared];
-    if (!impl_->spmv_buf_x || !impl_->spmv_buf_y)
-        throw std::runtime_error("create_spmv_workspace: cannot allocate buffers");
-
-    impl_->spmv_M      = static_cast<int>(M);
-    impl_->spmv_params = p;
-    impl_->spmv_ready  = true;
-}
-
-void Context::destroy_spmv_workspace()
-{
-    impl_->spmv_buf_x = nil;
-    impl_->spmv_buf_y = nil;
-    impl_->spmv_M     = 0;
-    impl_->spmv_ready = false;
-}
-
-void Context::laplacian_spmv_persistent(const std::vector<double>& x,
-                                        std::vector<double>&       y)
-{
-    if (!impl_->spmv_ready)
-        throw std::runtime_error("laplacian_spmv_persistent: workspace not ready");
-
-    const std::size_t M = static_cast<std::size_t>(impl_->spmv_M);
-    if (x.size() != M)
-        throw std::runtime_error("laplacian_spmv_persistent: x has wrong size");
-    y.resize(M);
-
-    float* x_buf = static_cast<float*>([impl_->spmv_buf_x contents]);
-    for (std::size_t i = 0; i < M; i++)
-        x_buf[i] = static_cast<float>(x[i]);
-
-    const auto& p = impl_->spmv_params;
-    const int Mx = p.Nx - 2, My = p.Ny - 2;
-    const double cx_d   = 1.0 / (p.hx * p.hx);
-    const double cy_d   = 1.0 / (p.hy * p.hy);
-    const double diag_d = 2.0 * (cx_d + cy_d);
-
-    const uint32_t Mx32   = static_cast<uint32_t>(Mx);
-    const uint32_t My32   = static_cast<uint32_t>(My);
-    const float    cx_f   = static_cast<float>(cx_d);
-    const float    cy_f   = static_cast<float>(cy_d);
-    const float    diag_f = static_cast<float>(diag_d);
-
-    id<MTLCommandBuffer> cb = [impl_->queue commandBuffer];
-    id<MTLComputeCommandEncoder> enc = [cb computeCommandEncoder];
-    if (!enc)
-        throw std::runtime_error("laplacian_spmv_persistent: cannot create encoder");
-
-    [enc setComputePipelineState:impl_->pso_lapspmv];
-    [enc setBuffer:impl_->spmv_buf_x offset:0 atIndex:0];
-    [enc setBuffer:impl_->spmv_buf_y offset:0 atIndex:1];
-    [enc setBytes:&Mx32   length:sizeof(Mx32)   atIndex:2];
-    [enc setBytes:&My32   length:sizeof(My32)   atIndex:3];
-    [enc setBytes:&cx_f   length:sizeof(cx_f)   atIndex:4];
-    [enc setBytes:&cy_f   length:sizeof(cy_f)   atIndex:5];
-    [enc setBytes:&diag_f length:sizeof(diag_f) atIndex:6];
-
-    const NSUInteger tg = pick_threadgroup_size(impl_->pso_lapspmv);
-    MTLSize grid  = MTLSizeMake((M + tg - 1) / tg, 1, 1);
-    MTLSize group = MTLSizeMake(tg, 1, 1);
-
-    [enc dispatchThreadgroups:grid threadsPerThreadgroup:group];
-    [enc endEncoding];
-    [cb commit];
-    [cb waitUntilCompleted];
-
-    if (cb.error)
-    {
-        NSString* msg = [cb.error localizedDescription];
-        throw std::runtime_error(std::string("Metal laplacian_spmv_persistent: ") +
-                                 ([msg UTF8String] ? [msg UTF8String] : "unknown"));
-    }
-
-    const float* y_buf = static_cast<const float*>([impl_->spmv_buf_y contents]);
-    for (std::size_t i = 0; i < M; i++)
-        y[i] = static_cast<double>(y_buf[i]);
-}
-
-
-void Context::jacobi_smooth_device(DeviceBuffer&    u,
-                                const DeviceBuffer& f,
-                                DeviceBuffer&       u_new,
-                                const JacobiParams& p,
-                                int                 nu)
+void Context::jacobi_smooth_device(DeviceBuffer&       u,
+                                   const DeviceBuffer& f,
+                                   DeviceBuffer&       u_new,
+                                   const JacobiParams& p,
+                                   int                 nu)
 {
     if (nu <= 0) return;
 
@@ -409,9 +291,9 @@ void Context::jacobi_smooth_device(DeviceBuffer&    u,
 }
 
 void Context::residual_restrict_device(const DeviceBuffer& u_fine,
-                                    const DeviceBuffer& f_fine,
-                                    DeviceBuffer& f_coarse,
-                                    const ResidualRestrictParams& p)
+                                       const DeviceBuffer& f_fine,
+                                       DeviceBuffer&       f_coarse,
+                                       const ResidualRestrictParams& p)
 {
     const uint32_t Nxf32 = static_cast<uint32_t>(p.Nxf);
     const uint32_t Nxc32 = static_cast<uint32_t>(p.Nxc);
@@ -450,11 +332,9 @@ void Context::residual_restrict_device(const DeviceBuffer& u_fine,
     release_enc(cb, enc, owned, "Metal residual_restrict: ");
 }
 
-
-
 void Context::prolong_add_device(DeviceBuffer&       u_fine,
-                                const DeviceBuffer& u_coarse,
-                                const ProlongParams& p)
+                                 const DeviceBuffer& u_coarse,
+                                 const ProlongParams& p)
 {
     const uint32_t Nxf32 = static_cast<uint32_t>(p.Nxf);
     const uint32_t Nyf32 = static_cast<uint32_t>(p.Nyf);
@@ -486,15 +366,11 @@ void Context::prolong_add_device(DeviceBuffer&       u_fine,
     release_enc(cb, enc, owned, "Metal prolong_add: ");
 }
 
-
-
 void Context::begin_batch()
 {
     if (impl_->batch_enc) return;
     impl_->batch_cb = [impl_->queue commandBuffer];
-
-    if (!impl_->batch_cb)
-        throw std::runtime_error("Metal begin_batch: no command buffer");
+    if (!impl_->batch_cb) throw std::runtime_error("Metal begin_batch: no command buffer");
 
     impl_->batch_enc = [impl_->batch_cb computeCommandEncoder];
     if (!impl_->batch_enc)
@@ -507,6 +383,7 @@ void Context::begin_batch()
 void Context::end_batch_and_wait()
 {
     if (!impl_->batch_enc) return;
+
     id<MTLCommandBuffer>         cb  = impl_->batch_cb;
     id<MTLComputeCommandEncoder> enc = impl_->batch_enc;
     impl_->batch_cb  = nil;
