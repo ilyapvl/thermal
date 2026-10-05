@@ -1,5 +1,7 @@
+# [AI]
 import struct
 import sys
+import os
 import numpy as np
 import pyvista as pv
 
@@ -24,6 +26,22 @@ def read_field_3d(path):
         T=T,
     )
 
+
+def build_grid(field):
+    Nx, Ny, Nz = field["Nx"], field["Ny"], field["Nz"]
+    Lx, Ly, Lz = field["Lx"], field["Ly"], field["Lz"]
+    T = field["T"]
+
+    grid = pv.ImageData(dimensions=(Nx, Ny, Nz))
+    grid.spacing = (
+        Lx / (Nx - 1) if Nx > 1 else Lx,
+        Ly / (Ny - 1) if Ny > 1 else Ly,
+        Lz / (Nz - 1) if Nz > 1 else Lz,
+    )
+    grid.point_data["T"] = T.ravel(order="C")
+    return grid
+
+
 def make_discrete_slice_mesh(T_slice, axis, position, hx, hy, hz):
     """
     T_slice: 2D массив.
@@ -32,15 +50,15 @@ def make_discrete_slice_mesh(T_slice, axis, position, hx, hy, hz):
       axis='x' → форма (Nz, Ny), срез в плоскости yz на x=position
     """
     if axis == "z":
-        n_rows, n_cols = T_slice.shape       # (Ny, Nx)
+        n_rows, n_cols = T_slice.shape
         u_spacing = hx
         v_spacing = hy
     elif axis == "y":
-        n_rows, n_cols = T_slice.shape       # (Nz, Nx)
+        n_rows, n_cols = T_slice.shape
         u_spacing = hx
         v_spacing = hz
-    else:  # x
-        n_rows, n_cols = T_slice.shape       # (Nz, Ny)
+    else:
+        n_rows, n_cols = T_slice.shape
         u_spacing = hy
         v_spacing = hz
 
@@ -77,7 +95,6 @@ def make_discrete_slice_mesh(T_slice, axis, position, hx, hy, hz):
 
 
 def extract_slice(field, axis, position):
-    """Возвращает (T_slice, snapped_position), где snapped_position — координата ближайшего узла."""
     Nx, Ny, Nz = field["Nx"], field["Ny"], field["Nz"]
     Lx, Ly, Lz = field["Lx"], field["Ly"], field["Lz"]
     T = field["T"]
@@ -100,20 +117,6 @@ def extract_slice(field, axis, position):
     i = max(0, min(Nx - 1, i))
     return T[:, :, i], i * hx
 
-def build_grid(field):
-    Nx, Ny, Nz = field["Nx"], field["Ny"], field["Nz"]
-    Lx, Ly, Lz = field["Lx"], field["Ly"], field["Lz"]
-    T = field["T"]
-
-    grid = pv.ImageData(dimensions=(Nx, Ny, Nz))
-    grid.spacing = (
-        Lx / (Nx - 1) if Nx > 1 else Lx,
-        Ly / (Ny - 1) if Ny > 1 else Ly,
-        Lz / (Nz - 1) if Nz > 1 else Lz,
-    )
-    grid.point_data["T"] = T.ravel(order="C")
-    return grid
-
 
 def show_interactive_slice(field, axis="z", screenshot=None):
     import vtk
@@ -123,6 +126,10 @@ def show_interactive_slice(field, axis="z", screenshot=None):
     Lx, Ly, Lz = field["Lx"], field["Ly"], field["Lz"]
     Tmin = float(field["T"].min())
     Tmax = float(field["T"].max())
+
+    hx = Lx / (Nx - 1) if Nx > 1 else Lx
+    hy = Ly / (Ny - 1) if Ny > 1 else Ly
+    hz = Lz / (Nz - 1) if Nz > 1 else Lz
 
     state = {
         "axis": axis,
@@ -134,50 +141,39 @@ def show_interactive_slice(field, axis="z", screenshot=None):
         "slider_widget": None,
     }
 
-    axes_info = {
-        "x": dict(normal="x", origin_fn=lambda v: (float(v), 0.0, 0.0), limit=Lx),
-        "y": dict(normal="y", origin_fn=lambda v: (0.0, float(v), 0.0), limit=Ly),
-        "z": dict(normal="z", origin_fn=lambda v: (0.0, 0.0, float(v)), limit=Lz),
-    }
+    limits = {"x": Lx, "y": Ly, "z": Lz}
 
     pl = pv.Plotter(window_size=[1500, 1000])
     pl.set_background("black")
 
-    init_pos = axes_info[axis]["limit"] * 0.5
-    init_sl = grid.slice(normal=axes_info[axis]["normal"],
-                         origin=axes_info[axis]["origin_fn"](init_pos))
+    def rebuild_slice(position):
+        T_slice, snapped = extract_slice(field, state["axis"], position)
+        mesh = make_discrete_slice_mesh(T_slice, state["axis"], snapped, hx, hy, hz)
 
-    state["slice_actor"] = pl.add_mesh(
-        init_sl,
-        cmap="inferno",
-        clim=[Tmin, Tmax],
-        show_scalar_bar=False,
-        lighting=False,
-    )
-
-    def update_slice(value):
-        info = axes_info[state["axis"]]
-        origin = info["origin_fn"](value)
-        sl = grid.slice(normal=info["normal"], origin=origin)
-        if sl.n_points == 0:
-            return
-
-        state["slice_actor"].mapper.SetInputData(sl)
-        state["slice_actor"].mapper.SetScalarRange(Tmin, Tmax)
-        state["slice_actor"].mapper.Update()
+        if state["slice_actor"] is None:
+            state["slice_actor"] = pl.add_mesh(
+                mesh,
+                cmap="inferno",
+                clim=[Tmin, Tmax],
+                show_scalar_bar=False,
+                lighting=False,
+                show_edges=False,
+            )
+        else:
+            state["slice_actor"].mapper.SetInputData(mesh)
+            state["slice_actor"].mapper.SetScalarRange(Tmin, Tmax)
+            state["slice_actor"].mapper.Update()
         pl.render()
 
     def add_axis_slider(axis_name):
-        info = axes_info[axis_name]
-
         slider_widget = vtk.vtkSliderWidget()
         slider_widget.SetInteractor(pl.iren.interactor)
         slider_widget.SetAnimationModeToAnimate()
 
         rep = vtk.vtkSliderRepresentation2D()
         rep.SetMinimumValue(0.0)
-        rep.SetMaximumValue(float(info["limit"]))
-        rep.SetValue(float(info["limit"]) * 0.5)
+        rep.SetMaximumValue(float(limits[axis_name]))
+        rep.SetValue(float(limits[axis_name]) * 0.5)
         rep.SetTitleText(f"Position along {axis_name}")
 
         rep.GetPoint1Coordinate().SetCoordinateSystemToNormalizedDisplay()
@@ -201,7 +197,7 @@ def show_interactive_slice(field, axis="z", screenshot=None):
 
         def on_interaction(obj, event):
             val = obj.GetRepresentation().GetValue()
-            update_slice(val)
+            rebuild_slice(val)
 
         slider_widget.AddObserver("InteractionEvent", on_interaction)
         slider_widget.AddObserver("EndInteractionEvent", on_interaction)
@@ -211,15 +207,13 @@ def show_interactive_slice(field, axis="z", screenshot=None):
 
     def rebuild_axis(new_axis):
         state["axis"] = new_axis
-        info = axes_info[new_axis]
-        pos = info["limit"] * 0.5
 
         if state["slider_widget"] is not None:
             state["slider_widget"].EnabledOff()
             state["slider_widget"] = None
 
         add_axis_slider(new_axis)
-        update_slice(pos)
+        rebuild_slice(float(limits[new_axis]) * 0.5)
 
     def toggle_volume():
         state["show_volume"] = not state["show_volume"]
@@ -264,6 +258,7 @@ def show_interactive_slice(field, axis="z", screenshot=None):
     pl.camera_position = "iso"
 
     add_axis_slider(axis)
+    rebuild_slice(float(limits[axis]) * 0.5)
 
     pl.add_key_event("x", lambda: rebuild_axis("x"))
     pl.add_key_event("y", lambda: rebuild_axis("y"))
@@ -285,65 +280,6 @@ def show_interactive_slice(field, axis="z", screenshot=None):
     else:
         pl.show()
 
-def show_plane_widget(field, screenshot=None):
-    """
-    Полностью интерактивная плоскость — её можно двигать мышью прямо в 3D,
-    вращать и менять ориентацию. Меньше UI, больше свободы.
-    """
-    grid = build_grid(field)
-    Tmin = float(field["T"].min())
-    Tmax = float(field["T"].max())
-
-    pl = pv.Plotter(window_size=[1500, 1000])
-    pl.set_background("black")
-
-    pl.add_volume(
-        grid,
-        cmap="inferno",
-        opacity="sigmoid_5",
-        show_scalar_bar=True,
-        scalar_bar_args={"title": "T", "n_labels": 6, "color": "white"},
-    )
-
-    # Слайс по умолчанию по z в центре
-    Nz = field["Nz"]
-    Lz = field["Lz"]
-    sl = grid.slice(normal="z", origin=(0.0, 0.0, Lz * 0.5))
-    sl_actor = pl.add_mesh(sl, cmap="inferno", clim=[Tmin, Tmax],
-                           show_scalar_bar=False, lighting=False,
-                           name="slice")
-
-    def on_plane_change(normal, origin):
-        new_sl = grid.slice(normal=normal, origin=origin)
-        if new_sl.n_points == 0:
-            return
-        pl.add_mesh(new_sl, cmap="inferno", clim=[Tmin, Tmax],
-                    show_scalar_bar=False, lighting=False,
-                    name="slice", reset_camera=False)
-        pl.render()
-
-    # Плоскость-виджет по центру, ориентация вдоль z
-    pl.add_plane_widget(
-        on_plane_change,
-        normal="z",
-        origin=(0.0, 0.0, Lz * 0.5),
-        color="yellow",
-        assign_to_axis=None,
-        tubing=False,
-    )
-
-    pl.add_axes(color="white")
-    pl.add_bounding_box(color="gray")
-    pl.camera_position = "iso"
-
-    print("Drag the yellow plane to move the slice.")
-
-    if screenshot:
-        pl.show(screenshot=screenshot, auto_close=True)
-        print(f"saved {screenshot}")
-    else:
-        pl.show()
-
 
 if __name__ == "__main__":
     path = sys.argv[1] if len(sys.argv) > 1 else "field.bin"
@@ -357,8 +293,6 @@ if __name__ == "__main__":
 
     if mode == "slice":
         show_interactive_slice(field, axis="z", screenshot=out)
-    elif mode == "plane":
-        show_plane_widget(field, screenshot=out)
     else:
-        print(f"unknown mode '{mode}'. use: slice | plane")
+        print(f"unknown mode '{mode}'. use: slice")
         sys.exit(1)
