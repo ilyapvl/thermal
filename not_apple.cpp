@@ -72,7 +72,7 @@ struct Context::Impl
 
 Context::Context() : impl_(new Impl)
 {
-    throw std::runtime_error("Metal backend not available");
+    throw std::runtime_error("Metal backend is not available on this platform");
 }
 
 Context::~Context()
@@ -89,7 +89,6 @@ const char* Context::device_name() const
 {
     return "stub";
 }
-
 
 void Context::jacobi_smooth_device(DeviceBuffer&, const DeviceBuffer&, DeviceBuffer&, const JacobiParams&, int)
 {

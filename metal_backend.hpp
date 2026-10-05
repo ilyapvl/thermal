@@ -53,8 +53,8 @@ public:
 
     struct JacobiParams
     {
-        int    Nx, Ny;
-        double hx, hy;
+        int    Nx, Ny, Nz;
+        double hx, hy, hz;
         double omega;
     };
 
@@ -62,27 +62,27 @@ public:
 
 
     void jacobi_smooth_device(DeviceBuffer&       u,
-                              const DeviceBuffer& f,
-                              DeviceBuffer&       u_new,
-                              const JacobiParams& p,
-                              int                 nu);
+                            const DeviceBuffer& f,
+                            DeviceBuffer&       u_new,
+                            const JacobiParams& p,
+                            int                 nu);
 
-    struct ResidualRestrictParams
+    struct Conv3dRestrictParams
     {
-        int    Nxf, Nyf;
-        int    Nxc, Nyc;
-        double hx, hy;
+        int    Nxf, Nyf, Nzf;
+        int    Nxc, Nyc, Nzc;
+        double hx, hy, hz;
     };
 
-    void residual_restrict_device(const DeviceBuffer& u_fine,
-                                  const DeviceBuffer& f_fine,
-                                  DeviceBuffer&       f_coarse,
-                                  const ResidualRestrictParams& p);
+    void conv3d_restrict_device(const DeviceBuffer& u_fine,
+                                const DeviceBuffer& f_fine,
+                                DeviceBuffer&       f_coarse,
+                                const Conv3dRestrictParams& p);
 
     struct ProlongParams
     {
-        int Nxf, Nyf;
-        int Nxc, Nyc;
+        int Nxf, Nyf, Nzf;
+        int Nxc, Nyc, Nzc;
     };
 
     void prolong_add_device(DeviceBuffer&       u_fine,
