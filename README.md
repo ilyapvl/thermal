@@ -12,7 +12,7 @@
 
 Аргументы:
 ```
-OMP_NUM_THREADS=5 OMP_WAIT_POLICY=active ./thermal Nx Ny Nz Tx1 Tx2 Ty1 Ty2 Tz1 Tz2 mg_gpu 100 1e-7 Lx Ly Lz
+OMP_NUM_THREADS=5 OMP_WAIT_POLICY=active ./thermal Nx Ny Nz Tx1 Tx2 Ty1 Ty2 Tz1 Tz2 mg_gpu <max_iter> <tol> Lx Ly Lz
 ```
 `Nx, Ny, Nz` - количество ячеек в сетке по осям
 
