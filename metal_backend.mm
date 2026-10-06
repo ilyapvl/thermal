@@ -197,7 +197,7 @@ Context::Context() : impl_(new Impl)
 
     impl_->pso_jacobi = make_pipeline(impl_->device, impl_->library, "jacobi_smooth_3d");
     impl_->pso_conv3d = make_pipeline(impl_->device, impl_->library, "conv3d");
-    impl_->pso_deconv3d = make_pipeline(impl_->device, impl_->library, "prolong_add_3d");
+    impl_->pso_deconv3d = make_pipeline(impl_->device, impl_->library, "deconv3d");
 
     NSString* name = [impl_->device name];
     impl_->device_name = name ? [name UTF8String] : "unknown";

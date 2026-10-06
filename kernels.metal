@@ -91,7 +91,7 @@ kernel void conv3d(device const float* u_fine [[buffer(0)]],
     f_coarse[((lc + 1) * Nyc + (jc + 1)) * Nxc + (ic + 1)] = sum * 0.015625f;
 }
 
-kernel void prolong_add_3d(device float* u_fine [[buffer(0)]],
+kernel void deconv3d(device float* u_fine [[buffer(0)]],
                         device const float* u_coarse [[buffer(1)]],
                         constant uint& Nxf [[buffer(2)]],
                         constant uint& Nyf [[buffer(3)]],
