@@ -14,6 +14,7 @@
 ```
 OMP_NUM_THREADS=5 OMP_WAIT_POLICY=active ./thermal Nx Ny Nz Tx1 Tx2 Ty1 Ty2 Tz1 Tz2 mg_gpu 100 1e-7 Lx Ly Lz
 ```
+`Nx, Ny, Nz` - количество ячеек в сетке по осям
 
 ## Сборка
 
@@ -42,6 +43,7 @@ brew install libomp
 #### Сборка
 
 ```
+git clone https://github.com/ilyapvl/thermal.git
 cd thermal
 mkdir build
 cmake -B build
@@ -68,7 +70,7 @@ sudo apt install -y build-essential cmake libomp-dev
 #### Сборка
 
 ```
-git clone <repo>
+git clone https://github.com/ilyapvl/thermal.git
 cd thermal
 mkdir build
 cmake -B build
@@ -77,6 +79,28 @@ make
 ```
 
 Собирается CPU-версия
+
+
+## Пример использования
+
+```
+OMP_NUM_THREADS=5 ./thermal 1025 1025 513 0 20 15 5 10 -5 mg_gpu 10000 1e-7 6 6 3
+```
+Результат:
+```
+Grid: 1025 x 1025 x 513
+Inner nodes: 534776319
+NNZ: 3739250163
+Metal device: Apple M3 Pro
+Method:        mg_gpu
+Iterations:    7
+Rel residual:  2.43636e-08
+Converged:     yes
+Time:          16.3534 s
+Written: field.bin
+```
+
+`field.bin` - результат вычислений
 
 
 
@@ -215,7 +239,7 @@ v_cycle(lvl):
 
 ### GPU
 
-В режиме `mg_gpu` на каждом уровне, где `Nx * Ny * Nz > gpu_threshold`, операции выполняются на GPU (если доступно). Вычислительные ядра сверток на самом деле полностью взяты из моего другого проекта и не слишком оптимизированы для конкретно этой задачи. Ощутимый эффект начинается на сетках выше `513 × 513 × 513`.
+В режиме `mg_gpu` на каждом уровне, где `Nx * Ny * Nz > gpu_threshold`, операции выполняются на GPU (если доступно). Вычислительные ядра сверток на самом деле полностью взяты из моего другого проекта и не слишком оптимизированы для конкретно этой задачи. Ощутимый эффект начинается на сетках около `513 × 513 × 513`.
 
 ### Грубейший уровень и solve_3x3
 
