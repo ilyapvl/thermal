@@ -11,7 +11,7 @@ public:
        float Lx, float Ly, float Lz,
        int nu1 = 3, int nu2 = 3, float omega = 2.0 / 3.0);
 
-    void apply(const std::vector<float>& r, std::vector<float>& z);
+    void apply(const std::vector<double>& r, std::vector<double>& z);
 
     int finest_inner() const
     {
@@ -42,10 +42,10 @@ private:
     void v_cycle(int lvl);
     void smooth(int lvl, int nu);
     void interpolate_reverse(int lvl);
-    void coarse_solve(int lvl);
+    void solve_final(int lvl);
 
-    void conv3d_restrict(int lvl);
-    void prolong(int lvl);
+    void conv3d(int lvl);
+    void deconv3d(int lvl);
 
     static int idx(int i, int j, int k, int Nx, int Ny) { return (k * Ny + j) * Nx + i; }
 };

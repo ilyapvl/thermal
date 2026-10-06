@@ -67,27 +67,27 @@ public:
                             const JacobiParams& p,
                             int                 nu);
 
-    struct Conv3dRestrictParams
+    struct Conv3dParams
     {
         int    Nxf, Nyf, Nzf;
         int    Nxc, Nyc, Nzc;
         double hx, hy, hz;
     };
 
-    void conv3d_restrict_device(const DeviceBuffer& u_fine,
+    void conv3d_device(const DeviceBuffer& u_fine,
                                 const DeviceBuffer& f_fine,
                                 DeviceBuffer&       f_coarse,
-                                const Conv3dRestrictParams& p);
+                                const Conv3dParams& p);
 
-    struct ProlongParams
+    struct Deconv3dParams
     {
         int Nxf, Nyf, Nzf;
         int Nxc, Nyc, Nzc;
     };
 
-    void prolong_add_device(DeviceBuffer&       u_fine,
+    void deconv3d_device(DeviceBuffer&       u_fine,
                             const DeviceBuffer& u_coarse,
-                            const ProlongParams& p);
+                            const Deconv3dParams& p);
 
     void begin_batch();
     void end_batch_and_wait();

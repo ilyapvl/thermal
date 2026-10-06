@@ -109,8 +109,8 @@ struct Context::Impl
     id<MTLLibrary> library = nil;
 
     id<MTLComputePipelineState> pso_jacobi = nil;
-    id<MTLComputePipelineState> pso_resrestrict = nil;
-    id<MTLComputePipelineState> pso_prolong = nil;
+    id<MTLComputePipelineState> pso_conv3d = nil;
+    id<MTLComputePipelineState> pso_deconv3d = nil;
 
     id<MTLCommandBuffer> batch_cb = nil;
     id<MTLComputeCommandEncoder> batch_enc = nil;
@@ -196,8 +196,8 @@ Context::Context() : impl_(new Impl)
     if (!impl_->library) throw std::runtime_error("Metal: library is nil");
 
     impl_->pso_jacobi = make_pipeline(impl_->device, impl_->library, "jacobi_smooth_3d");
-    impl_->pso_resrestrict = make_pipeline(impl_->device, impl_->library, "conv3d_restrict_3d");
-    impl_->pso_prolong = make_pipeline(impl_->device, impl_->library, "prolong_add_3d");
+    impl_->pso_conv3d = make_pipeline(impl_->device, impl_->library, "conv3d");
+    impl_->pso_deconv3d = make_pipeline(impl_->device, impl_->library, "prolong_add_3d");
 
     NSString* name = [impl_->device name];
     impl_->device_name = name ? [name UTF8String] : "unknown";
@@ -286,8 +286,8 @@ void Context::jacobi_smooth_device(DeviceBuffer& u, const DeviceBuffer& f, Devic
     release_enc(cb, enc, owned, "Metal jacobi_smooth_device: ");
 }
 
-void Context::conv3d_restrict_device(const DeviceBuffer& u_fine, const DeviceBuffer& f_fine,
-                                    DeviceBuffer& f_coarse, const Conv3dRestrictParams& p)
+void Context::conv3d_device(const DeviceBuffer& u_fine, const DeviceBuffer& f_fine,
+                                    DeviceBuffer& f_coarse, const Conv3dParams& p)
 {
     const uint32_t Nxf32 = static_cast<uint32_t>(p.Nxf);
     const uint32_t Nyf32 = static_cast<uint32_t>(p.Nyf);
@@ -302,7 +302,7 @@ void Context::conv3d_restrict_device(const DeviceBuffer& u_fine, const DeviceBuf
     const float dg_f = 2.0f * (cx_f + cy_f + cz_f);
 
     const uint32_t Mc = (p.Nxc - 2) * (p.Nyc - 2) * (p.Nzc - 2);
-    const NSUInteger tg = pick_threadgroup_size(impl_->pso_resrestrict);
+    const NSUInteger tg = pick_threadgroup_size(impl_->pso_conv3d);
     MTLSize grid = MTLSizeMake((Mc + tg - 1) / tg, 1, 1);
     MTLSize group = MTLSizeMake(tg, 1, 1);
 
@@ -315,7 +315,7 @@ void Context::conv3d_restrict_device(const DeviceBuffer& u_fine, const DeviceBuf
     bool owned;
     acquire_enc(impl_, cb, enc, owned);
 
-    [enc setComputePipelineState:impl_->pso_resrestrict];
+    [enc setComputePipelineState:impl_->pso_conv3d];
     [enc setBuffer:buf_u offset:0 atIndex:0];
     [enc setBuffer:buf_f offset:0 atIndex:1];
     [enc setBuffer:buf_fc offset:0 atIndex:2];
@@ -331,10 +331,10 @@ void Context::conv3d_restrict_device(const DeviceBuffer& u_fine, const DeviceBuf
     [enc setBytes:&dg_f length:sizeof(dg_f) atIndex:12];
     [enc dispatchThreadgroups:grid threadsPerThreadgroup:group];
 
-    release_enc(cb, enc, owned, "Metal conv3d_restrict: ");
+    release_enc(cb, enc, owned, "Metal conv3d: ");
 }
 
-void Context::prolong_add_device(DeviceBuffer& u_fine, const DeviceBuffer& u_coarse, const ProlongParams& p)
+void Context::deconv3d_device(DeviceBuffer& u_fine, const DeviceBuffer& u_coarse, const Deconv3dParams& p)
 {
     const uint32_t Nxf32 = static_cast<uint32_t>(p.Nxf);
     const uint32_t Nyf32 = static_cast<uint32_t>(p.Nyf);
@@ -344,7 +344,7 @@ void Context::prolong_add_device(DeviceBuffer& u_fine, const DeviceBuffer& u_coa
     const uint32_t Nzc32 = static_cast<uint32_t>(p.Nzc);
 
     const uint32_t Mf = (p.Nxf - 2) * (p.Nyf - 2) * (p.Nzf - 2);
-    const NSUInteger tg = pick_threadgroup_size(impl_->pso_prolong);
+    const NSUInteger tg = pick_threadgroup_size(impl_->pso_deconv3d);
     MTLSize grid = MTLSizeMake((Mf + tg - 1) / tg, 1, 1);
     MTLSize group = MTLSizeMake(tg, 1, 1);
 
@@ -356,7 +356,7 @@ void Context::prolong_add_device(DeviceBuffer& u_fine, const DeviceBuffer& u_coa
     bool owned;
     acquire_enc(impl_, cb, enc, owned);
 
-    [enc setComputePipelineState:impl_->pso_prolong];
+    [enc setComputePipelineState:impl_->pso_deconv3d];
     [enc setBuffer:buf_uf offset:0 atIndex:0];
     [enc setBuffer:buf_uc offset:0 atIndex:1];
     [enc setBytes:&Nxf32 length:sizeof(Nxf32) atIndex:2];

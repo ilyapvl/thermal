@@ -1,6 +1,7 @@
 #include "multigrid.hpp"
 #include <cmath>
 #include <algorithm>
+#include <iostream>
 
 MG::MG(metal_backend::Context* ctx,
        int Nx, int Ny, int Nz,
@@ -233,17 +234,17 @@ void MG::interpolate_reverse(int lvl)
     }
 }
 
-void MG::conv3d_restrict(int lvl)
+void MG::conv3d(int lvl)
 {
     Level& F = levels_[lvl];
     Level& C = levels_[lvl + 1];
 
     if (enable_gpu_ && (F.Nx * F.Ny * F.Nz) > gpu_threshold_)
     {
-        metal_backend::Context::Conv3dRestrictParams p {
+        metal_backend::Context::Conv3dParams p {
             F.Nx, F.Ny, F.Nz, C.Nx, C.Ny, C.Nz, F.hx, F.hy, F.hz
         };
-        ctx_->conv3d_restrict_device(F.u, F.f, C.f, p);
+        ctx_->conv3d_device(F.u, F.f, C.f, p);
         return;
     }
 
@@ -308,40 +309,70 @@ void MG::conv3d_restrict(int lvl)
 }
 
 
-void MG::prolong(int lvl)
+void MG::deconv3d(int lvl)
 {
     Level& F = levels_[lvl];
     Level& C = levels_[lvl + 1];
 
     if (enable_gpu_ && (F.Nx * F.Ny * F.Nz) > gpu_threshold_)
     {
-        metal_backend::Context::ProlongParams p {
+        metal_backend::Context::Deconv3dParams p {
             F.Nx, F.Ny, F.Nz, C.Nx, C.Ny, C.Nz
         };
-        ctx_->prolong_add_device(F.u, C.u, p);
+        ctx_->deconv3d_device(F.u, C.u, p);
         return;
     }
 
     interpolate_reverse(lvl);
 }
 
-void MG::coarse_solve(int lvl)
+void MG::solve_final(int lvl)
 {
-    static constexpr int num_iter = 100;
-
     Level& L = levels_[lvl];
     const int Nx = L.Nx, Ny = L.Ny, Nz = L.Nz;
-    const float cx = L.cx, cy = L.cy, cz = L.cz, diag = L.diag;
 
-    const float dg_f = static_cast<float>(diag);
-    const float cx_f = static_cast<float>(cx);
-    const float cy_f = static_cast<float>(cy);
-    const float cz_f = static_cast<float>(cz);
+    const float cx_f = static_cast<float>(L.cx);
+    const float cy_f = static_cast<float>(L.cy);
+    const float cz_f = static_cast<float>(L.cz);
+    const float dg_f = static_cast<float>(L.diag);
 
     const float* f_ptr = L.f.data();
     float* u_ptr = L.u.data();
 
-    for (int s = 0; s < num_iter; s++)
+    auto compute_residual_norm = [&]() -> double
+    {
+        double sum = 0.0;
+
+        for (int l = 1; l < Nz - 1; l++)
+        {
+            for (int j = 1; j < Ny - 1; j++)
+            {
+                for (int i = 1; i < Nx - 1; i++)
+                {
+                    const int k = idx(i, j, l, Nx, Ny);
+
+                    const float Au = dg_f * u_ptr[k]
+                        - cx_f * (u_ptr[k - 1] + u_ptr[k + 1])
+                        - cy_f * (u_ptr[k - Nx] + u_ptr[k + Nx])
+                        - cz_f * (u_ptr[k - Nx * Ny] + u_ptr[k + Nx * Ny]);
+
+                    const double r = static_cast<double>(f_ptr[k]) - static_cast<double>(Au);
+                    sum += r * r;
+                }
+            }
+        }
+
+        return std::sqrt(sum);
+    };
+
+    const double r0 = compute_residual_norm();
+
+    const double tol = 1e-8 * r0;
+    const int max_iter = 1000000;
+    const int check_every = 10;
+
+    
+    for (int s = 0; s < max_iter; s++)
     {
         for (int l = 1; l < Nz - 1; l++)
         {
@@ -360,6 +391,15 @@ void MG::coarse_solve(int lvl)
                 }
             }
         }
+
+        if ((s + 1) % check_every == 0)
+        {
+            const double r = compute_residual_norm();
+            if (r < tol)
+            {
+                return;
+            }
+        }
     }
 }
 
@@ -369,8 +409,13 @@ void MG::v_cycle(int lvl)
 
     if (lvl == last)
     {
-        if (gpu_batch_open_) { ctx_->end_batch_and_wait(); gpu_batch_open_ = false; }
-        coarse_solve(lvl);
+        if (gpu_batch_open_)
+        {
+            ctx_->end_batch_and_wait();
+            gpu_batch_open_ = false;
+        
+        }
+        solve_final(lvl);
         return;
     }
 
@@ -380,7 +425,7 @@ void MG::v_cycle(int lvl)
     else if (!this_gpu && gpu_batch_open_) { ctx_->end_batch_and_wait(); gpu_batch_open_ = false; }
 
     smooth(lvl, nu1_);
-    conv3d_restrict(lvl);
+    conv3d(lvl);
 
     levels_[lvl + 1].u.fill(0.0f);
 
@@ -389,11 +434,11 @@ void MG::v_cycle(int lvl)
     if (this_gpu && !gpu_batch_open_) { ctx_->begin_batch(); gpu_batch_open_ = true; }
     else if (!this_gpu && gpu_batch_open_) { ctx_->end_batch_and_wait(); gpu_batch_open_ = false; }
 
-    prolong(lvl);
+    deconv3d(lvl);
     smooth(lvl, nu2_);
 }
 
-void MG::apply(const std::vector<float>& r_fine, std::vector<float>& z_fine)
+void MG::apply(const std::vector<double>& r_fine, std::vector<double>& z_fine)
 {
     Level& L0 = levels_.front();
     const int Nx = L0.Nx, Ny = L0.Ny, Nz = L0.Nz;
@@ -415,7 +460,7 @@ void MG::apply(const std::vector<float>& r_fine, std::vector<float>& z_fine)
             for (int i = 0; i < Mx; i++)
             {
                 const int kf = (l * My + j) * Mx + i;
-                L0f[idx(i + 1, j + 1, l + 1, Nx, Ny)] = r_fine[kf];
+                L0f[idx(i + 1, j + 1, l + 1, Nx, Ny)] = static_cast<float>(r_fine[kf]);
             }
         }
     }
@@ -436,7 +481,7 @@ void MG::apply(const std::vector<float>& r_fine, std::vector<float>& z_fine)
             for (int i = 0; i < Mx; i++)
             {
                 const int kf = (l * My + j) * Mx + i;
-                z_fine[kf] = L0u[idx(i + 1, j + 1, l + 1, Nx, Ny)];
+                z_fine[kf] = static_cast<double>(L0u[idx(i + 1, j + 1, l + 1, Nx, Ny)]);
             }
         }
     }

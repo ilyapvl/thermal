@@ -14,8 +14,8 @@ def read_field_3d(path):
         Tymin, Tymax = struct.unpack("<dd", f.read(16))
         Tzmin, Tzmax = struct.unpack("<dd", f.read(16))
 
-        raw = f.read(Nx * Ny * Nz * 4)
-        T = np.frombuffer(raw, dtype="<f4").reshape(Nz, Ny, Nx).astype(np.float64)
+        raw = f.read(Nx * Ny * Nz * 8)
+        T = np.frombuffer(raw, dtype="<f8").reshape(Nz, Ny, Nx).copy()
 
     return dict(
         Nx=Nx, Ny=Ny, Nz=Nz,

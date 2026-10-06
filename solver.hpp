@@ -13,22 +13,20 @@ struct SolverResult
     double seconds = 0.0;
 };
 
-double dot(const float* a, const float* b, int n);
+double dot(const double* a, const double* b, int n);
 
-inline double dot(const std::vector<float>& a, const std::vector<float>& b)
+inline double dot(const std::vector<double>& a, const std::vector<double>& b)
 {
     return dot(a.data(), b.data(), static_cast<int>(a.size()));
 }
 
-SolverResult cg_solve_generic(
-    const std::function<void(const std::vector<float>&, std::vector<float>&)>& apply_A,
+SolverResult cg_solve(
+    const std::function<void(const std::vector<double>&, std::vector<double>&)>& apply_A,
     double bnorm_sq,
-    const std::function<void(std::vector<float>&)>& fill_rhs,
-    std::vector<float>& x,
-    const std::function<void(const std::vector<float>&, std::vector<float>&)>& apply_M,
+    const std::function<void(std::vector<double>&)>& fill_rhs,
+    std::vector<double>& x,
+    const std::function<void(const std::vector<double>&, std::vector<double>&)>& apply_M,
     int max_iter,
     double tol);
 
-
-
-#endif // SOLVER_HPP
+#endif

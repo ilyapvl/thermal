@@ -34,20 +34,20 @@ kernel void jacobi_smooth_3d(device const float* u [[buffer(0)]],
     u_new[idx] = u[idx] + omega * (f[idx] - Au) / diag;
 }
 
-kernel void conv3d_restrict_3d(device const float* u_fine [[buffer(0)]],
-                                device const float* f_fine [[buffer(1)]],
-                                device float* f_coarse [[buffer(2)]],
-                                constant uint& Nxf [[buffer(3)]],
-                                constant uint& Nyf [[buffer(4)]],
-                                constant uint& Nzf [[buffer(5)]],
-                                constant uint& Nxc [[buffer(6)]],
-                                constant uint& Nyc [[buffer(7)]],
-                                constant uint& Nzc [[buffer(8)]],
-                                constant float& cx [[buffer(9)]],
-                                constant float& cy [[buffer(10)]],
-                                constant float& cz [[buffer(11)]],
-                                constant float& diag [[buffer(12)]],
-                                uint kc [[thread_position_in_grid]])
+kernel void conv3d(device const float* u_fine [[buffer(0)]],
+                    device const float* f_fine [[buffer(1)]],
+                    device float* f_coarse [[buffer(2)]],
+                    constant uint& Nxf [[buffer(3)]],
+                    constant uint& Nyf [[buffer(4)]],
+                    constant uint& Nzf [[buffer(5)]],
+                    constant uint& Nxc [[buffer(6)]],
+                    constant uint& Nyc [[buffer(7)]],
+                    constant uint& Nzc [[buffer(8)]],
+                    constant float& cx [[buffer(9)]],
+                    constant float& cy [[buffer(10)]],
+                    constant float& cz [[buffer(11)]],
+                    constant float& diag [[buffer(12)]],
+                    uint kc [[thread_position_in_grid]])
 {
     const uint Mcx = Nxc - 2;
     const uint Mcy = Nyc - 2;
