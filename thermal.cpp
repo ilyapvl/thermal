@@ -174,6 +174,9 @@ int main(int argc, char** argv)
     if (argc > 10) p.method = argv[10];
     if (argc > 11) p.max_iter = std::atoi(argv[11]);
     if (argc > 12) p.tol = std::atof(argv[12]);
+    if (argc > 13) p.Lx = std::atof(argv[13]);
+    if (argc > 14) p.Ly = std::atof(argv[14]);
+    if (argc > 15) p.Lz = std::atof(argv[15]);
 
     Grid g;
     g.Nx = p.Nx;
