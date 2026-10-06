@@ -93,10 +93,10 @@ Inner nodes: 534776319
 NNZ: 3739250163
 Metal device: Apple M3 Pro
 Method:        mg_gpu
-Iterations:    7
-Rel residual:  2.43636e-08
+Iterations:    9
+Rel residual:  3.45436e-08
 Converged:     yes
-Time:          16.3534 s
+Time:          15.9434 s
 Written: field.bin
 ```
 
