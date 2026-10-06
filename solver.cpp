@@ -16,15 +16,12 @@ double dot(const double* a, const double* b, int n)
     return result;
 #else
     double s = 0.0;
-    for (int i = 0; i < n; i++)
-    {
-        s += a[i] * b[i];
-    }
+    for (int i = 0; i < n; i++) s += a[i] * b[i];
     return s;
 #endif
 }
 
-SolverResult cg_solve_generic(
+SolverResult cg_solve(
     const std::function<void(const std::vector<double>&, std::vector<double>&)>& apply_A,
     double bnorm_sq,
     const std::function<void(std::vector<double>&)>& fill_rhs,
@@ -37,20 +34,23 @@ SolverResult cg_solve_generic(
     const auto t0 = clock::now();
 
     const int n = static_cast<int>(x.size());
-    if (n <= 0) throw std::runtime_error("cg_solve_generic: x must be pre-sized");
+    if (n <= 0) throw std::runtime_error("cg_solve: x must be pre-sized");
 
-    std::vector<double> r(n, 0.0), p(n), Ap(n);
+    std::vector<double> r(n), p(n), Ap(n);
 
     fill_rhs(r);
 
     const double bnorm = std::sqrt(std::max(bnorm_sq, 1e-300));
 
-    if (apply_M) apply_M(r, Ap);
-    else std::copy(r.begin(), r.end(), Ap.begin());
-
-    std::copy(Ap.begin(), Ap.end(), p.begin());
-
-    double rz = dot(r, Ap);
+    double rz;
+    
+    {
+        std::vector<double> z(n);
+        if (apply_M) apply_M(r, z);
+        else std::copy(r.begin(), r.end(), z.begin());
+        std::copy(z.begin(), z.end(), p.begin());
+        rz = dot(r, z);
+    }
 
     for (int it = 1; it <= max_iter; it++)
     {
@@ -71,26 +71,35 @@ SolverResult cg_solve_generic(
 
 #ifdef __APPLE__
         {
-            const double pos_a = alpha;
-            const double neg_a = -alpha;
-            vDSP_vsmaD(p.data(), 1, &pos_a, x.data(), 1, x.data(), 1, static_cast<vDSP_Length>(n));
-            vDSP_vsmaD(Ap.data(), 1, &neg_a, r.data(), 1, r.data(), 1, static_cast<vDSP_Length>(n));
+            const double a = alpha;
+            vDSP_vsmaD(p.data(), 1, &a, x.data(), 1, x.data(), 1,
+                       static_cast<vDSP_Length>(n));
         }
 #else
-        for (int i = 0; i < n; i++)
+        for (int i = 0; i < n; i++) x[i] += alpha * p[i];
+#endif
+
+        fill_rhs(r);
+        apply_A(x, Ap);
+
+#ifdef __APPLE__
         {
-            x[i] += alpha * p[i];
-            r[i] -= alpha * Ap[i];
+            const double neg_one = -1.0;
+            vDSP_vsmaD(Ap.data(), 1, &neg_one, r.data(), 1, r.data(), 1,
+                       static_cast<vDSP_Length>(n));
         }
+#else
+        for (int i = 0; i < n; i++) r[i] -= Ap[i];
 #endif
 
         const double rnorm = std::sqrt(dot(r, r));
+        const double rel_res = rnorm / bnorm;
 
-        if (rnorm / bnorm < tol)
+        if (rel_res < tol)
         {
             SolverResult res;
             res.iterations = it;
-            res.rel_residual = rnorm / bnorm;
+            res.rel_residual = rel_res;
             res.converged = true;
             res.seconds = std::chrono::duration<double>(clock::now() - t0).count();
             return res;
@@ -104,8 +113,9 @@ SolverResult cg_solve_generic(
 
 #ifdef __APPLE__
         {
-            const double bb = beta;
-            vDSP_vsmaD(p.data(), 1, &bb, Ap.data(), 1, p.data(), 1, static_cast<vDSP_Length>(n));
+            const double b = beta;
+            vDSP_vsmaD(p.data(), 1, &b, Ap.data(), 1, p.data(), 1,
+                       static_cast<vDSP_Length>(n));
         }
 #else
         for (int i = 0; i < n; i++) p[i] = Ap[i] + beta * p[i];
