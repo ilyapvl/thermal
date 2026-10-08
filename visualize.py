@@ -225,7 +225,7 @@ def show_interactive_slice(field, axis="z", screenshot=None):
         state["show_iso"] = not state["show_iso"]
         if not state["iso_actors"] and state["show_iso"]:
             iso_values = np.linspace(Tmin + 0.15 * (Tmax - Tmin),
-                                     Tmax - 0.15 * (Tmax - Tmin), 5)
+                                     Tmax - 0.15 * (Tmax - Tmin), 20)
             for iso in iso_values:
                 surf = grid.contour([iso], scalars="T")
                 if surf.n_points > 0:

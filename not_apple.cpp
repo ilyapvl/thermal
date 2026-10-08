@@ -95,12 +95,12 @@ void Context::jacobi_smooth_device(DeviceBuffer&, const DeviceBuffer&, DeviceBuf
     throw std::runtime_error("Metal backend not available");
 }
 
-void Context::residual_restrict_device(const DeviceBuffer&, const DeviceBuffer&, DeviceBuffer&, const ResidualRestrictParams&)
+void Context::conv3d_device(const DeviceBuffer&, const DeviceBuffer&, DeviceBuffer&, const Conv3dParams&)
 {
     throw std::runtime_error("Metal backend not available");
 }
 
-void Context::prolong_add_device(DeviceBuffer&, const DeviceBuffer&, const ProlongParams&)
+void Context::deconv3d_device(DeviceBuffer&, const DeviceBuffer&, const Deconv3dParams&)
 {
     throw std::runtime_error("Metal backend not available");
 }
